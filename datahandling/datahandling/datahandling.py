@@ -459,7 +459,8 @@ class DataObject():
                 val = _uncertainties.ufloat(_np.NaN, _np.NaN)
                 Ftrap = val
                 A = val
-                Gamma = val     
+                Gamma = val
+                AveOfDeviation = val
             #TotalSumSquaredError = (A.std_dev/A.n)**2 + (Gamma.std_dev/Gamma.n)**2 + (Ftrap.std_dev/Ftrap.n)**2
             #print("totalError: {}".format(TotalSumSquaredError))            
             #if TotalSumSquaredError < MinTotalSumSquaredError:
