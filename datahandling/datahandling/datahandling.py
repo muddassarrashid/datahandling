@@ -301,19 +301,19 @@ class DataObject():
         Returns
         -------
         A : uncertainties.ufloat
-                Fitting constant A
-                A = γ**2*Γ_0*(K_b*T_0)/(π*m)
-                where:
-                        γ = conversionFactor
-                        Γ_0 = Damping factor due to environment
-                        π = pi
+            Fitting constant A
+            A = γ**2*Γ_0*(K_b*T_0)/(π*m)
+            where:
+                γ = conversionFactor
+                Γ_0 = Damping factor due to environment
+                π = pi
         Ftrap : uncertainties.ufloat
-                The trapping frequency in the z axis (in angular frequency)
+            The trapping frequency in the z axis (in angular frequency)
         Gamma : uncertainties.ufloat
-                The damping factor Gamma = Γ = Γ_0 + δΓ
-                where:
-                        Γ_0 = Damping factor due to environment
-                        δΓ = extra damping due to feedback
+            The damping factor Gamma = Γ = Γ_0 + δΓ
+            where:
+                Γ_0 = Damping factor due to environment
+                δΓ = extra damping due to feedback or other effects
         """
         if MakeFig == True:
             Params, ParamsErr, fig, ax = fit_PSD(
@@ -391,18 +391,20 @@ class DataObject():
         HalfMax = MinPSD + (MaxPSD-MinPSD)/2 # need to get this on log scale
 
         try:
-            LeftSideOfPeak = self.freqs[list(self.PSD).index(take_closest(self.PSD[lowerIndex:centralIndex], HalfMax))]
+            LeftSideOfPeakIndex = list(self.PSD).index(take_closest(self.PSD[lowerIndex:centralIndex], HalfMax))
+            LeftSideOfPeak = self.freqs[LeftSideOfPeakIndex]
         except IndexError:
             _warnings.warn("range is too small, returning NaN", UserWarning)
             val = _uncertainties.ufloat(_np.NaN, _np.NaN)
-            return val, val, val
+            return val, val, val, val
 
         try:
-            RightSideOfPeak = self.freqs[list(self.PSD).index(take_closest(self.PSD[centralIndex:upperIndex], HalfMax))]
+            RightSideOfPeakIndex = list(self.PSD).index(take_closest(self.PSD[centralIndex:upperIndex], HalfMax))
+            RightSideOfPeak = self.freqs[RightSideOfPeakIndex]
         except IndexError:
             _warnings.warn("range is too small, returning NaN", UserWarning)
             val = _uncertainties.ufloat(_np.NaN, _np.NaN)
-            return val, val, val 
+            return val, val, val, val
 
         FWHM = RightSideOfPeak - LeftSideOfPeak
 
@@ -414,7 +416,12 @@ class DataObject():
         FTrap = self.Ftrap
         A = self.A
         Gamma = self.Gamma
-        return FTrap, A, Gamma
+
+        omegaArray = 2*_np.pi*self.freqs[LeftSideOfPeakIndex:RightSideOfPeakIndex]
+        PSDArray = self.PSD[LeftSideOfPeakIndex:RightSideOfPeakIndex]
+        FittedValues = _PSD_fitting_eqn(A, 2*_np.pi*FTrap, Gamma, omegaArray)
+        AveOfDeviation = sum((PSDArray-FittedValues)/PSDArray)/len(PSDArray)
+        return FTrap, A, Gamma, AveOfDeviation
 
     def get_fit_auto(self, CentralFreq, MaxWidth=15000, MinWidth=500, WidthIntervals=500, ShowFig=True): 
         """
@@ -443,21 +450,22 @@ class DataObject():
         Gamma : ufloat
             Gamma, the damping parameter
         """  
-        MinTotalSumSquaredError = 1e10
+        MinTotalAveOfDeviation = _np.infty
         for Width in _np.arange(MaxWidth, MinWidth-WidthIntervals, -WidthIntervals):
             try:
-                Ftrap, A, Gamma = self.get_fit_from_peak(CentralFreq-Width/2, CentralFreq+Width/2, Silent=True, ShowFig=False)
+                Ftrap, A, Gamma, AveOfDeviation = self.get_fit_from_peak(CentralFreq-Width/2, CentralFreq+Width/2, Silent=True, ShowFig=False)
             except RuntimeError:
                 _warnings.warn("Couldn't find good fit with width {}".format(Width), RuntimeWarning)
                 val = _uncertainties.ufloat(_np.NaN, _np.NaN)
                 Ftrap = val
                 A = val
-                Gamma = val                
-                
-            TotalSumSquaredError = (A.std_dev/A.n)**2 + (Gamma.std_dev/Gamma.n)**2 + (Ftrap.std_dev/Ftrap.n)**2
-            #print("totalError: {}".format(TotalSumSquaredError))
-            if TotalSumSquaredError < MinTotalSumSquaredError:
-                MinTotalSumSquaredError = TotalSumSquaredError
+                Gamma = val     
+            #TotalSumSquaredError = (A.std_dev/A.n)**2 + (Gamma.std_dev/Gamma.n)**2 + (Ftrap.std_dev/Ftrap.n)**2
+            #print("totalError: {}".format(TotalSumSquaredError))            
+            #if TotalSumSquaredError < MinTotalSumSquaredError:
+            print("{} < {} = {}".format(AveOfDeviation, MinTotalAveOfDeviation, AveOfDeviation < MinTotalAveOfDeviation))
+            if AveOfDeviation < MinTotalAveOfDeviation:
+                MinTotalAveOfDeviation = AveOfDeviation
                 BestWidth = Width
         print("found best")
         self.get_fit_from_peak(CentralFreq-BestWidth/2, CentralFreq+BestWidth/2, ShowFig=ShowFig)
@@ -582,13 +590,27 @@ def take_closest(myList, myNumber):
     else:
         return before
 
-
-def PSD_Fitting(A, Omega0, gamma, omega):
-    # Amp = amplitude
-    # Omega0 = trapping (Angular) frequency
-    # gamma = Big Gamma - damping (due to environment and feedback (if
-    # feedback is on))
-    return 10 * _np.log10(A / ((Omega0**2 - omega**2)**2 + (omega * gamma)**2))
+def _PSD_fitting_eqn(A, OmegaTrap, gamma, omega):
+    """
+    Parameters
+    ----------
+    A : float
+        Fitting constant A
+        A = γ**2*Γ_0*(K_b*T_0)/(π*m)
+        where:
+            γ = conversionFactor
+            Γ_0 = Damping factor due to environment
+            π = pi
+    OmegaTrap : float
+        The trapping frequency in the axis of interest 
+        (in angular frequency)
+    Gamma : float
+        The damping factor Gamma = Γ = Γ_0 + δΓ
+        where:
+            Γ_0 = Damping factor due to environment
+            δΓ = extra damping due to feedback or other effects
+    """
+    return A / ((OmegaTrap**2 - omega**2)**2 + (omega * gamma)**2)
 
 
 def fit_PSD(Data, bandwidth, NMovAve, TrapFreqGuess, AGuess=0.1e10, GammaGuess=400, MakeFig=True, ShowFig=True):
@@ -653,7 +675,7 @@ def fit_PSD(Data, bandwidth, NMovAve, TrapFreqGuess, AGuess=0.1e10, GammaGuess=4
     logPSD_smoothed = 10 * _np.log10(PSD_smoothed)
 
     def calc_theory_PSD_curve_fit(freqs, A, TrapFreq, BigGamma):
-        Theory_PSD = PSD_Fitting(A, TrapFreq, BigGamma, freqs)
+        Theory_PSD = 10*_np.log10(_PSD_fitting_eqn(A, TrapFreq, BigGamma, freqs))
         if A < 0 or TrapFreq < 0 or BigGamma < 0:
             return 1e9
         else:
@@ -671,11 +693,15 @@ def fit_PSD(Data, bandwidth, NMovAve, TrapFreqGuess, AGuess=0.1e10, GammaGuess=4
         fig = _plt.figure()
         ax = fig.add_subplot(111)
 
-        PSDTheory_fit_initial = PSD_Fitting(p0[0], p0[1],
-                                            p0[2], freqs_smoothed)
+        PSDTheory_fit_initial = 10*_np.log10(
+            _PSD_fitting_eqn(p0[0], p0[1],
+                             p0[2], freqs_smoothed))
 
-        PSDTheory_fit = PSD_Fitting(Params_Fit[0], Params_Fit[1],
-                                    Params_Fit[2], freqs_smoothed)
+        PSDTheory_fit = 10*_np.log10(
+            _PSD_fitting_eqn(Params_Fit[0],
+                             Params_Fit[1],
+                             Params_Fit[2],
+                             freqs_smoothed))
 
         ax.plot(AngFreqs / (2 * _np.pi), Data.PSD,
                 color="darkblue", label="Raw PSD Data", alpha=0.5)
